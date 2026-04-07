@@ -3,7 +3,8 @@
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-import time
+import requests
+from io import StringIO
 
 st.set_page_config(page_title="Dashboard Mantenciones", layout="wide")
 
@@ -31,34 +32,43 @@ with col_btn2:
 # =========================
 @st.cache_data(ttl=10)
 def cargar_datos():
-    df = pd.read_csv(URL)
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+        response = requests.get(URL, headers=headers, timeout=20)
+        response.raise_for_status()
 
-    # Limpiar nombres de columnas
+        if not response.text.strip():
+            raise ValueError("La respuesta del Google Sheet está vacía.")
+
+        df = pd.read_csv(StringIO(response.text))
+
+    except Exception as e:
+        st.error("No se pudo leer Google Sheets.")
+        st.error("Revisa que la hoja esté publicada o compartida como pública, y que el GID sea correcto.")
+        st.code(str(e))
+        st.stop()
+
     df.columns = [str(c).strip() for c in df.columns]
-
-    # Eliminar columnas vacías tipo Unnamed
     df = df.loc[:, ~df.columns.str.contains(r"^Unnamed", na=False)]
     df = df.dropna(how="all")
 
-    # Limpiar strings
     for col in df.columns:
         if df[col].dtype == "object":
             df[col] = df[col].astype(str).str.strip()
 
     df = df.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "NaN": pd.NA})
 
-    # Normalizar texto
     for col in ["TURNO", "OPERADOR", "EQUIPO", "FORMATO", "SABOR", "MANTENCIÓN", "OBSERVACIÓN"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip().str.upper()
 
-    # Corregir algunos textos pegados
     if "MANTENCIÓN" in df.columns:
         df["MANTENCIÓN"] = df["MANTENCIÓN"].str.replace(
             r"OTRO \(ESPECIFICAR\).*", "OTRO (ESPECIFICAR)", regex=True
         )
 
-    # Eliminar duplicados
     cols_clave = [
         "FECHA", "TURNO", "OPERADOR", "EQUIPO", "FORMATO", "SABOR",
         "N° CABEZAL", "N° TULIPA", "MANTENCIÓN", "OBSERVACIÓN"
@@ -67,7 +77,6 @@ def cargar_datos():
     if cols_clave:
         df = df.drop_duplicates(subset=cols_clave)
 
-    # Fecha
     if "FECHA" in df.columns:
         fecha_limpia = (
             df["FECHA"]
@@ -89,7 +98,6 @@ def cargar_datos():
 
         df["FECHA_DT"] = pd.to_datetime(fecha_limpia, format="%d %m %Y", errors="coerce")
 
-    # Numéricos
     for col in ["N° CABEZAL", "N° TULIPA"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -183,21 +191,12 @@ def obtener_criticidad(df_filtrado):
     return cabezal_critico, tulipa_critica, combo_critico, ranking_combo, ranking_cabezal, ranking_tulipa
 
 
-# =========================
-# CARGA
-# =========================
 df = cargar_datos()
 df_filtrado = aplicar_filtros(df)
 
-# =========================
-# HEADER
-# =========================
 st.title("Dashboard de Mantenciones")
 st.caption("Registro de mantenciones de tulipas, encajonadora y desencajonadora")
 
-# =========================
-# KPIs GENERALES
-# =========================
 total_mant = len(df_filtrado)
 n_operadores = df_filtrado["OPERADOR"].nunique() if "OPERADOR" in df_filtrado.columns else 0
 n_equipos = df_filtrado["EQUIPO"].nunique() if "EQUIPO" in df_filtrado.columns else 0
@@ -213,9 +212,6 @@ c2.metric("Operadores", n_operadores)
 c3.metric("Equipos", n_equipos)
 c4.metric("Mantención más frecuente", mant_top)
 
-# =========================
-# CRITICIDAD
-# =========================
 cabezal_critico, tulipa_critica, combo_critico, ranking_combo, ranking_cabezal, ranking_tulipa = obtener_criticidad(df_filtrado)
 
 st.subheader("Respuesta automática: criticidad")
@@ -228,14 +224,11 @@ if combo_critico is not None:
     a4.metric("Formato crítico", str(combo_critico["FORMATO"]))
 
     st.info(
-        f"Cabezal más crítico: {int(cabezal_critico['N° CABEZAL'])} "
-        f"(criticidad = {int(cabezal_critico['Criticidad'])}) | "
-        f"Tulipa más crítica: {int(tulipa_critica['N° TULIPA'])} "
-        f"(criticidad = {int(tulipa_critica['Criticidad'])}). "
+        f"Cabezal más crítico: {int(cabezal_critico['N° CABEZAL'])} | "
+        f"Tulipa más crítica: {int(tulipa_critica['N° TULIPA'])} | "
         f"Combinación más crítica: Cabezal {int(combo_critico['N° CABEZAL'])} + "
-        f"Tulipa {int(combo_critico['N° TULIPA'])}, en {combo_critico['EQUIPO']} "
-        f"y formato {combo_critico['FORMATO']} "
-        f"(frecuencia = {int(combo_critico['Frecuencia'])}, criticidad = {int(combo_critico['Criticidad'])})."
+        f"Tulipa {int(combo_critico['N° TULIPA'])} en {combo_critico['EQUIPO']} "
+        f"formato {combo_critico['FORMATO']}."
     )
 
     b1, b2 = st.columns(2)
@@ -253,9 +246,6 @@ if combo_critico is not None:
 else:
     st.warning("No hay datos suficientes para calcular criticidad.")
 
-# =========================
-# GRÁFICOS
-# =========================
 col1, col2 = st.columns(2)
 
 with col1:
@@ -276,46 +266,6 @@ with col2:
         fig = px.bar(mant, x="MANTENCIÓN", y="Cantidad", title="Frecuencia por tipo de mantención")
         st.plotly_chart(fig, use_container_width=True)
 
-col3, col4 = st.columns(2)
-
-with col3:
-    if "OPERADOR" in df_filtrado.columns:
-        op = df_filtrado["OPERADOR"].value_counts().reset_index()
-        op.columns = ["OPERADOR", "Cantidad"]
-        fig = px.bar(op, x="OPERADOR", y="Cantidad", title="Mantenciones por operador")
-        st.plotly_chart(fig, use_container_width=True)
-
-with col4:
-    if "EQUIPO" in df_filtrado.columns:
-        eq = df_filtrado["EQUIPO"].value_counts().reset_index()
-        eq.columns = ["EQUIPO", "Cantidad"]
-        fig = px.pie(eq, names="EQUIPO", values="Cantidad", title="Distribución por equipo")
-        st.plotly_chart(fig, use_container_width=True)
-
-col5, col6 = st.columns(2)
-
-with col5:
-    if "TURNO" in df_filtrado.columns:
-        turno = df_filtrado["TURNO"].value_counts().reset_index()
-        turno.columns = ["TURNO", "Cantidad"]
-        fig = px.bar(turno, x="TURNO", y="Cantidad", title="Mantenciones por turno")
-        st.plotly_chart(fig, use_container_width=True)
-
-with col6:
-    if "FORMATO" in df_filtrado.columns:
-        formato = df_filtrado["FORMATO"].value_counts().reset_index()
-        formato.columns = ["FORMATO", "Cantidad"]
-        fig = px.bar(formato, x="FORMATO", y="Cantidad", title="Mantenciones por formato")
-        st.plotly_chart(fig, use_container_width=True)
-
-# =========================
-# ANÁLISIS ADICIONAL
-# =========================
-st.subheader("Cruce equipo vs mantención")
-if {"EQUIPO", "MANTENCIÓN"}.issubset(df_filtrado.columns):
-    tabla_cruce = pd.crosstab(df_filtrado["EQUIPO"], df_filtrado["MANTENCIÓN"])
-    st.dataframe(tabla_cruce, use_container_width=True)
-
 st.subheader("Detalle de registros")
 columnas_mostrar = [
     c for c in [
@@ -325,9 +275,6 @@ columnas_mostrar = [
 ]
 st.dataframe(df_filtrado[columnas_mostrar], use_container_width=True)
 
-# =========================
-# DESCARGA
-# =========================
 csv = df_filtrado.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
     "Descargar datos filtrados en CSV",
