@@ -37,10 +37,6 @@ def normalizar_formato(valor):
     txt = txt.replace("[", "").replace("]", "")
     txt = txt.replace("CC", "").strip()
     txt = txt.replace(".", "").replace(",", "")
-    if txt in {"2000", "2000 "}:
-        return "2.000 CC"
-    if txt in {"2500", "2500 "}:
-        return "2.500 CC"
     if "2000" in txt:
         return "2.000 CC"
     if "2500" in txt:
@@ -81,9 +77,10 @@ def crear_heatmap_formato(df_base, equipo, formato):
     if matriz.empty:
         return None, matriz
 
-    z = matriz[[c for c in matriz.columns if c.startswith("Cabezal ")]].values
+    columnas_cabezal = [c for c in matriz.columns if c.startswith("Cabezal ")]
+    z = matriz[columnas_cabezal].values
     y = matriz["N° TULIPA"].astype(str).tolist()
-    x = [c.replace("Cabezal ", "C") for c in matriz.columns if c.startswith("Cabezal ")]
+    x = [c.replace("Cabezal ", "C") for c in columnas_cabezal]
 
     fig = go.Figure(
         data=go.Heatmap(
@@ -145,6 +142,22 @@ def obtener_combo_critico(df_filtrado):
     )
 
     return ranking.iloc[0], ranking
+
+def mostrar_tabla_coloreada(df_tabla, subset_cols=None):
+    if df_tabla is None or df_tabla.empty:
+        st.info("Sin datos para mostrar.")
+        return
+
+    subset_cols = subset_cols or []
+
+    try:
+        import matplotlib  # noqa: F401
+        st.dataframe(
+            df_tabla.style.background_gradient(cmap="YlOrRd", subset=subset_cols),
+            use_container_width=True
+        )
+    except Exception:
+        st.dataframe(df_tabla, use_container_width=True)
 
 # =========================
 # CARGA
@@ -405,14 +418,12 @@ if {"EQUIPO", "MANTENCIÓN"}.issubset(df_filtrado.columns):
 # ESQUEMA / MAPAS POR EQUIPO Y FORMATO
 # =========================
 st.subheader("Esquema de equipos: frecuencia de mantenciones por cabezal y tulipa")
-
 st.markdown("""
 Cada diagrama muestra la frecuencia de mantenciones para la combinación:
 **Equipo + Formato + Cabezal + Tulipa**.
 """)
 
 equipos_base = ["ENCAJONADORA", "DESENCAJONADORA"]
-formatos_base = ["2.000 CC", "2.500 CC"]
 
 for equipo in equipos_base:
     st.markdown(f"### {equipo}")
@@ -422,9 +433,9 @@ for equipo in equipos_base:
         fig_2000, matriz_2000 = crear_heatmap_formato(df_filtrado, equipo, "2.000 CC")
         if fig_2000 is not None:
             st.plotly_chart(fig_2000, use_container_width=True)
-            st.dataframe(
-                matriz_2000.style.background_gradient(cmap="YlOrRd", subset=[c for c in matriz_2000.columns if c.startswith("Cabezal ")]),
-                use_container_width=True
+            mostrar_tabla_coloreada(
+                matriz_2000,
+                subset_cols=[c for c in matriz_2000.columns if c.startswith("Cabezal ")]
             )
         else:
             st.info("Sin datos para este esquema.")
@@ -433,9 +444,9 @@ for equipo in equipos_base:
         fig_2500, matriz_2500 = crear_heatmap_formato(df_filtrado, equipo, "2.500 CC")
         if fig_2500 is not None:
             st.plotly_chart(fig_2500, use_container_width=True)
-            st.dataframe(
-                matriz_2500.style.background_gradient(cmap="YlOrRd", subset=[c for c in matriz_2500.columns if c.startswith("Cabezal ")]),
-                use_container_width=True
+            mostrar_tabla_coloreada(
+                matriz_2500,
+                subset_cols=[c for c in matriz_2500.columns if c.startswith("Cabezal ")]
             )
         else:
             st.info("Sin datos para este esquema.")
@@ -453,9 +464,9 @@ if {"EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"}.issubset(df_filtrado.c
         .sort_values(["EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"])
     )
 
-    st.dataframe(
-        tabla_frecuencia.style.background_gradient(cmap="YlOrRd", subset=["Frecuencia"]),
-        use_container_width=True
+    mostrar_tabla_coloreada(
+        tabla_frecuencia,
+        subset_cols=["Frecuencia"]
     )
 
 # =========================
