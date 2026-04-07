@@ -4,18 +4,14 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 
-st.set_page_config(
-    page_title="Dashboard Mantenciones",
-    layout="wide"
-)
+st.set_page_config(page_title="Dashboard Mantenciones", layout="wide")
 
 # =========================
 # CONFIG
 # =========================
 SHEET_ID = "1Pr5c_3hnSxp37D5A-5bOCO5Pon9zIwRpA7xx709YEEA"
-GID = "0"  # cambia si la hoja correcta tiene otro gid
+GID = "0"
 URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
-
 
 # =========================
 # FUNCIONES
@@ -24,39 +20,23 @@ URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gi
 def cargar_datos():
     df = pd.read_csv(URL)
 
-    # Limpiar nombres de columnas
     df.columns = [str(c).strip() for c in df.columns]
-
-    # Eliminar columnas vacías tipo "Unnamed"
     df = df.loc[:, ~df.columns.str.contains(r"^Unnamed", na=False)]
-
-    # Eliminar filas completamente vacías
     df = df.dropna(how="all")
 
-    # Estandarizar texto
     for col in df.columns:
         if df[col].dtype == "object":
             df[col] = df[col].astype(str).str.strip()
 
-    # Convertir vacíos falsos a NaN
-    df = df.replace(
-        {
-            "": pd.NA,
-            "nan": pd.NA,
-            "None": pd.NA,
-            "NaN": pd.NA
-        }
-    )
+    df = df.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "NaN": pd.NA})
 
-    # Parseo robusto de fecha en español:
-    # "miércoles, 1 de abril de 2026" -> "1 abril 2026"
     if "FECHA" in df.columns:
         fecha_limpia = (
             df["FECHA"]
             .astype(str)
             .str.lower()
-            .str.replace(r"^[^,]+,\s*", "", regex=True)   # quita "miércoles, "
-            .str.replace(r"\s+de\s+", " ", regex=True)    # "1 de abril de 2026" -> "1 abril 2026"
+            .str.replace(r"^[^,]+,\s*", "", regex=True)
+            .str.replace(r"\s+de\s+", " ", regex=True)
             .str.strip()
         )
 
@@ -66,14 +46,11 @@ def cargar_datos():
             "septiembre": "09", "octubre": "10", "noviembre": "11", "diciembre": "12"
         }
 
-        # Reemplazar nombre de mes por número
         for mes, num in meses.items():
             fecha_limpia = fecha_limpia.str.replace(fr"\b{mes}\b", num, regex=True)
 
-        # Queda como "1 04 2026"
         df["FECHA_DT"] = pd.to_datetime(fecha_limpia, format="%d %m %Y", errors="coerce")
 
-    # Numéricos
     for col in ["N° CABEZAL", "N° TULIPA"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -84,41 +61,18 @@ def cargar_datos():
 def aplicar_filtros(df):
     st.sidebar.header("Filtros")
 
-    turnos = st.sidebar.multiselect(
-        "Turno",
-        sorted(df["TURNO"].dropna().unique()) if "TURNO" in df.columns else [],
-        default=sorted(df["TURNO"].dropna().unique()) if "TURNO" in df.columns else []
-    )
+    def multiselect_col(nombre):
+        if nombre in df.columns:
+            vals = sorted(df[nombre].dropna().unique())
+            return st.sidebar.multiselect(nombre, vals, default=vals)
+        return []
 
-    operadores = st.sidebar.multiselect(
-        "Operador",
-        sorted(df["OPERADOR"].dropna().unique()) if "OPERADOR" in df.columns else [],
-        default=sorted(df["OPERADOR"].dropna().unique()) if "OPERADOR" in df.columns else []
-    )
-
-    equipos = st.sidebar.multiselect(
-        "Equipo",
-        sorted(df["EQUIPO"].dropna().unique()) if "EQUIPO" in df.columns else [],
-        default=sorted(df["EQUIPO"].dropna().unique()) if "EQUIPO" in df.columns else []
-    )
-
-    formatos = st.sidebar.multiselect(
-        "Formato",
-        sorted(df["FORMATO"].dropna().unique()) if "FORMATO" in df.columns else [],
-        default=sorted(df["FORMATO"].dropna().unique()) if "FORMATO" in df.columns else []
-    )
-
-    sabores = st.sidebar.multiselect(
-        "Sabor",
-        sorted(df["SABOR"].dropna().unique()) if "SABOR" in df.columns else [],
-        default=sorted(df["SABOR"].dropna().unique()) if "SABOR" in df.columns else []
-    )
-
-    mantenciones = st.sidebar.multiselect(
-        "Mantención",
-        sorted(df["MANTENCIÓN"].dropna().unique()) if "MANTENCIÓN" in df.columns else [],
-        default=sorted(df["MANTENCIÓN"].dropna().unique()) if "MANTENCIÓN" in df.columns else []
-    )
+    turnos = multiselect_col("TURNO")
+    operadores = multiselect_col("OPERADOR")
+    equipos = multiselect_col("EQUIPO")
+    formatos = multiselect_col("FORMATO")
+    sabores = multiselect_col("SABOR")
+    mantenciones = multiselect_col("MANTENCIÓN")
 
     df_filtrado = df.copy()
 
@@ -138,6 +92,49 @@ def aplicar_filtros(df):
     return df_filtrado
 
 
+def obtener_criticidad(df_filtrado):
+    cols_req = ["N° CABEZAL", "N° TULIPA", "EQUIPO", "FORMATO"]
+    if not all(c in df_filtrado.columns for c in cols_req):
+        return None, None, None, None
+
+    base = df_filtrado.dropna(subset=["N° CABEZAL", "N° TULIPA"]).copy()
+    if base.empty:
+        return None, None, None, None
+
+    # Frecuencia por cabezal
+    ranking_cabezal = (
+        base.groupby("N° CABEZAL")
+        .size()
+        .reset_index(name="Frecuencia")
+        .sort_values(["Frecuencia", "N° CABEZAL"], ascending=[False, True])
+    )
+
+    # Frecuencia por tulipa
+    ranking_tulipa = (
+        base.groupby("N° TULIPA")
+        .size()
+        .reset_index(name="Frecuencia")
+        .sort_values(["Frecuencia", "N° TULIPA"], ascending=[False, True])
+    )
+
+    # Frecuencia por combinación cabezal+tulipa+equipo+formato
+    ranking_combo = (
+        base.groupby(["N° CABEZAL", "N° TULIPA", "EQUIPO", "FORMATO"])
+        .size()
+        .reset_index(name="Frecuencia")
+        .sort_values(
+            ["Frecuencia", "N° CABEZAL", "N° TULIPA"],
+            ascending=[False, True, True]
+        )
+    )
+
+    cabezal_critico = ranking_cabezal.iloc[0] if not ranking_cabezal.empty else None
+    tulipa_critica = ranking_tulipa.iloc[0] if not ranking_tulipa.empty else None
+    combo_critico = ranking_combo.iloc[0] if not ranking_combo.empty else None
+
+    return cabezal_critico, tulipa_critica, combo_critico, ranking_combo
+
+
 # =========================
 # CARGA
 # =========================
@@ -151,7 +148,7 @@ st.title("Dashboard de Mantenciones")
 st.caption("Registro de mantenciones de tulipas, encajonadora y desencajonadora")
 
 # =========================
-# KPIs
+# KPIs GENERALES
 # =========================
 total_mant = len(df_filtrado)
 n_operadores = df_filtrado["OPERADOR"].nunique() if "OPERADOR" in df_filtrado.columns else 0
@@ -169,6 +166,55 @@ c3.metric("Equipos", n_equipos)
 c4.metric("Mantención más frecuente", mant_top)
 
 # =========================
+# CRITICIDAD
+# =========================
+cabezal_critico, tulipa_critica, combo_critico, ranking_combo = obtener_criticidad(df_filtrado)
+
+st.subheader("Respuesta automática: criticidad")
+
+if combo_critico is not None:
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Cabezal más crítico", int(combo_critico["N° CABEZAL"]))
+    a2.metric("Tulipa más crítica", int(combo_critico["N° TULIPA"]))
+    a3.metric("Equipo crítico", str(combo_critico["EQUIPO"]))
+    a4.metric("Formato crítico", str(combo_critico["FORMATO"]))
+
+    st.info(
+        f"Combinación más crítica detectada: Cabezal {int(combo_critico['N° CABEZAL'])} + "
+        f"Tulipa {int(combo_critico['N° TULIPA'])}, en {combo_critico['EQUIPO']} "
+        f"y formato {combo_critico['FORMATO']} (frecuencia = {int(combo_critico['Frecuencia'])})."
+    )
+
+    b1, b2 = st.columns(2)
+    with b1:
+        st.markdown("**Ranking de cabezales**")
+        ranking_cabezal = (
+            df_filtrado.dropna(subset=["N° CABEZAL"])
+            .groupby("N° CABEZAL")
+            .size()
+            .reset_index(name="Frecuencia")
+            .sort_values("Frecuencia", ascending=False)
+        )
+        st.dataframe(ranking_cabezal, use_container_width=True)
+
+    with b2:
+        st.markdown("**Ranking de tulipas**")
+        ranking_tulipa = (
+            df_filtrado.dropna(subset=["N° TULIPA"])
+            .groupby("N° TULIPA")
+            .size()
+            .reset_index(name="Frecuencia")
+            .sort_values("Frecuencia", ascending=False)
+        )
+        st.dataframe(ranking_tulipa, use_container_width=True)
+
+    st.markdown("**Top combinaciones cabezal + tulipa + equipo + formato**")
+    st.dataframe(ranking_combo.head(10), use_container_width=True)
+
+else:
+    st.warning("No hay datos suficientes para calcular criticidad.")
+
+# =========================
 # GRÁFICOS
 # =========================
 col1, col2 = st.columns(2)
@@ -181,29 +227,14 @@ with col1:
             .reset_index(name="Cantidad")
             .sort_values("FECHA_DT")
         )
-        fig = px.line(
-            serie,
-            x="FECHA_DT",
-            y="Cantidad",
-            markers=True,
-            title="Mantenciones por día"
-        )
+        fig = px.line(serie, x="FECHA_DT", y="Cantidad", markers=True, title="Mantenciones por día")
         st.plotly_chart(fig, use_container_width=True)
 
 with col2:
     if "MANTENCIÓN" in df_filtrado.columns:
-        mant = (
-            df_filtrado["MANTENCIÓN"]
-            .value_counts()
-            .reset_index()
-        )
+        mant = df_filtrado["MANTENCIÓN"].value_counts().reset_index()
         mant.columns = ["MANTENCIÓN", "Cantidad"]
-        fig = px.bar(
-            mant,
-            x="MANTENCIÓN",
-            y="Cantidad",
-            title="Frecuencia por tipo de mantención"
-        )
+        fig = px.bar(mant, x="MANTENCIÓN", y="Cantidad", title="Frecuencia por tipo de mantención")
         st.plotly_chart(fig, use_container_width=True)
 
 col3, col4 = st.columns(2)
@@ -212,24 +243,14 @@ with col3:
     if "OPERADOR" in df_filtrado.columns:
         op = df_filtrado["OPERADOR"].value_counts().reset_index()
         op.columns = ["OPERADOR", "Cantidad"]
-        fig = px.bar(
-            op,
-            x="OPERADOR",
-            y="Cantidad",
-            title="Mantenciones por operador"
-        )
+        fig = px.bar(op, x="OPERADOR", y="Cantidad", title="Mantenciones por operador")
         st.plotly_chart(fig, use_container_width=True)
 
 with col4:
     if "EQUIPO" in df_filtrado.columns:
         eq = df_filtrado["EQUIPO"].value_counts().reset_index()
         eq.columns = ["EQUIPO", "Cantidad"]
-        fig = px.pie(
-            eq,
-            names="EQUIPO",
-            values="Cantidad",
-            title="Distribución por equipo"
-        )
+        fig = px.pie(eq, names="EQUIPO", values="Cantidad", title="Distribución por equipo")
         st.plotly_chart(fig, use_container_width=True)
 
 col5, col6 = st.columns(2)
@@ -238,24 +259,14 @@ with col5:
     if "TURNO" in df_filtrado.columns:
         turno = df_filtrado["TURNO"].value_counts().reset_index()
         turno.columns = ["TURNO", "Cantidad"]
-        fig = px.bar(
-            turno,
-            x="TURNO",
-            y="Cantidad",
-            title="Mantenciones por turno"
-        )
+        fig = px.bar(turno, x="TURNO", y="Cantidad", title="Mantenciones por turno")
         st.plotly_chart(fig, use_container_width=True)
 
 with col6:
     if "FORMATO" in df_filtrado.columns:
         formato = df_filtrado["FORMATO"].value_counts().reset_index()
         formato.columns = ["FORMATO", "Cantidad"]
-        fig = px.bar(
-            formato,
-            x="FORMATO",
-            y="Cantidad",
-            title="Mantenciones por formato"
-        )
+        fig = px.bar(formato, x="FORMATO", y="Cantidad", title="Mantenciones por formato")
         st.plotly_chart(fig, use_container_width=True)
 
 # =========================
