@@ -3,6 +3,7 @@
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import time
 
 st.set_page_config(page_title="Dashboard Mantenciones", layout="wide")
 
@@ -11,25 +12,62 @@ st.set_page_config(page_title="Dashboard Mantenciones", layout="wide")
 # =========================
 SHEET_ID = "1Pr5c_3hnSxp37D5A-5bOCO5Pon9zIwRpA7xx709YEEA"
 GID = "0"
-URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
+URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
+
+# =========================
+# BOTÓN DE ACTUALIZACIÓN
+# =========================
+col_btn1, col_btn2 = st.columns([1, 5])
+with col_btn1:
+    if st.button("Actualizar datos"):
+        st.cache_data.clear()
+        st.rerun()
+
+with col_btn2:
+    st.caption("Si cambias datos en Google Sheets, presiona este botón para recargar.")
 
 # =========================
 # FUNCIONES
 # =========================
-@st.cache_data
+@st.cache_data(ttl=10)
 def cargar_datos():
     df = pd.read_csv(URL)
 
+    # Limpiar nombres de columnas
     df.columns = [str(c).strip() for c in df.columns]
+
+    # Eliminar columnas vacías tipo Unnamed
     df = df.loc[:, ~df.columns.str.contains(r"^Unnamed", na=False)]
     df = df.dropna(how="all")
 
+    # Limpiar strings
     for col in df.columns:
         if df[col].dtype == "object":
             df[col] = df[col].astype(str).str.strip()
 
     df = df.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "NaN": pd.NA})
 
+    # Normalizar texto
+    for col in ["TURNO", "OPERADOR", "EQUIPO", "FORMATO", "SABOR", "MANTENCIÓN", "OBSERVACIÓN"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip().str.upper()
+
+    # Corregir algunos textos pegados
+    if "MANTENCIÓN" in df.columns:
+        df["MANTENCIÓN"] = df["MANTENCIÓN"].str.replace(
+            r"OTRO \(ESPECIFICAR\).*", "OTRO (ESPECIFICAR)", regex=True
+        )
+
+    # Eliminar duplicados
+    cols_clave = [
+        "FECHA", "TURNO", "OPERADOR", "EQUIPO", "FORMATO", "SABOR",
+        "N° CABEZAL", "N° TULIPA", "MANTENCIÓN", "OBSERVACIÓN"
+    ]
+    cols_clave = [c for c in cols_clave if c in df.columns]
+    if cols_clave:
+        df = df.drop_duplicates(subset=cols_clave)
+
+    # Fecha
     if "FECHA" in df.columns:
         fecha_limpia = (
             df["FECHA"]
@@ -51,6 +89,7 @@ def cargar_datos():
 
         df["FECHA_DT"] = pd.to_datetime(fecha_limpia, format="%d %m %Y", errors="coerce")
 
+    # Numéricos
     for col in ["N° CABEZAL", "N° TULIPA"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -95,36 +134,45 @@ def aplicar_filtros(df):
 def obtener_criticidad(df_filtrado):
     cols_req = ["N° CABEZAL", "N° TULIPA", "EQUIPO", "FORMATO"]
     if not all(c in df_filtrado.columns for c in cols_req):
-        return None, None, None, None
+        return None, None, None, None, None, None
 
     base = df_filtrado.dropna(subset=["N° CABEZAL", "N° TULIPA"]).copy()
     if base.empty:
-        return None, None, None, None
+        return None, None, None, None, None, None
 
-    # Frecuencia por cabezal
+    pesos_mant = {
+        "CAMBIO CUERPO TULIPA PLÁSTICA": 4,
+        "CAMBIO DE GOMA TULIPA": 3,
+        "CAMBIO DE VÁSTAGO": 2,
+        "CAMBIO DE RESORTE": 2,
+        "CAMBIO DE SEGURO DE VÁSTAGO": 2,
+        "CAMBIO DE CONECTOR NEUMÁTICO": 2,
+        "OTRO (ESPECIFICAR)": 1
+    }
+
+    if "MANTENCIÓN" in base.columns:
+        base["PESO"] = base["MANTENCIÓN"].map(pesos_mant).fillna(1)
+    else:
+        base["PESO"] = 1
+
     ranking_cabezal = (
-        base.groupby("N° CABEZAL")
-        .size()
-        .reset_index(name="Frecuencia")
-        .sort_values(["Frecuencia", "N° CABEZAL"], ascending=[False, True])
+        base.groupby("N° CABEZAL", as_index=False)
+        .agg(Frecuencia=("N° CABEZAL", "size"), Criticidad=("PESO", "sum"))
+        .sort_values(["Criticidad", "Frecuencia", "N° CABEZAL"], ascending=[False, False, True])
     )
 
-    # Frecuencia por tulipa
     ranking_tulipa = (
-        base.groupby("N° TULIPA")
-        .size()
-        .reset_index(name="Frecuencia")
-        .sort_values(["Frecuencia", "N° TULIPA"], ascending=[False, True])
+        base.groupby("N° TULIPA", as_index=False)
+        .agg(Frecuencia=("N° TULIPA", "size"), Criticidad=("PESO", "sum"))
+        .sort_values(["Criticidad", "Frecuencia", "N° TULIPA"], ascending=[False, False, True])
     )
 
-    # Frecuencia por combinación cabezal+tulipa+equipo+formato
     ranking_combo = (
-        base.groupby(["N° CABEZAL", "N° TULIPA", "EQUIPO", "FORMATO"])
-        .size()
-        .reset_index(name="Frecuencia")
+        base.groupby(["N° CABEZAL", "N° TULIPA", "EQUIPO", "FORMATO"], as_index=False)
+        .agg(Frecuencia=("PESO", "size"), Criticidad=("PESO", "sum"))
         .sort_values(
-            ["Frecuencia", "N° CABEZAL", "N° TULIPA"],
-            ascending=[False, True, True]
+            ["Criticidad", "Frecuencia", "N° CABEZAL", "N° TULIPA"],
+            ascending=[False, False, True, True]
         )
     )
 
@@ -132,7 +180,7 @@ def obtener_criticidad(df_filtrado):
     tulipa_critica = ranking_tulipa.iloc[0] if not ranking_tulipa.empty else None
     combo_critico = ranking_combo.iloc[0] if not ranking_combo.empty else None
 
-    return cabezal_critico, tulipa_critica, combo_critico, ranking_combo
+    return cabezal_critico, tulipa_critica, combo_critico, ranking_combo, ranking_cabezal, ranking_tulipa
 
 
 # =========================
@@ -168,44 +216,35 @@ c4.metric("Mantención más frecuente", mant_top)
 # =========================
 # CRITICIDAD
 # =========================
-cabezal_critico, tulipa_critica, combo_critico, ranking_combo = obtener_criticidad(df_filtrado)
+cabezal_critico, tulipa_critica, combo_critico, ranking_combo, ranking_cabezal, ranking_tulipa = obtener_criticidad(df_filtrado)
 
 st.subheader("Respuesta automática: criticidad")
 
 if combo_critico is not None:
     a1, a2, a3, a4 = st.columns(4)
-    a1.metric("Cabezal más crítico", int(combo_critico["N° CABEZAL"]))
-    a2.metric("Tulipa más crítica", int(combo_critico["N° TULIPA"]))
+    a1.metric("Cabezal más crítico", int(cabezal_critico["N° CABEZAL"]))
+    a2.metric("Tulipa más crítica", int(tulipa_critica["N° TULIPA"]))
     a3.metric("Equipo crítico", str(combo_critico["EQUIPO"]))
     a4.metric("Formato crítico", str(combo_critico["FORMATO"]))
 
     st.info(
-        f"Combinación más crítica detectada: Cabezal {int(combo_critico['N° CABEZAL'])} + "
+        f"Cabezal más crítico: {int(cabezal_critico['N° CABEZAL'])} "
+        f"(criticidad = {int(cabezal_critico['Criticidad'])}) | "
+        f"Tulipa más crítica: {int(tulipa_critica['N° TULIPA'])} "
+        f"(criticidad = {int(tulipa_critica['Criticidad'])}). "
+        f"Combinación más crítica: Cabezal {int(combo_critico['N° CABEZAL'])} + "
         f"Tulipa {int(combo_critico['N° TULIPA'])}, en {combo_critico['EQUIPO']} "
-        f"y formato {combo_critico['FORMATO']} (frecuencia = {int(combo_critico['Frecuencia'])})."
+        f"y formato {combo_critico['FORMATO']} "
+        f"(frecuencia = {int(combo_critico['Frecuencia'])}, criticidad = {int(combo_critico['Criticidad'])})."
     )
 
     b1, b2 = st.columns(2)
     with b1:
         st.markdown("**Ranking de cabezales**")
-        ranking_cabezal = (
-            df_filtrado.dropna(subset=["N° CABEZAL"])
-            .groupby("N° CABEZAL")
-            .size()
-            .reset_index(name="Frecuencia")
-            .sort_values("Frecuencia", ascending=False)
-        )
         st.dataframe(ranking_cabezal, use_container_width=True)
 
     with b2:
         st.markdown("**Ranking de tulipas**")
-        ranking_tulipa = (
-            df_filtrado.dropna(subset=["N° TULIPA"])
-            .groupby("N° TULIPA")
-            .size()
-            .reset_index(name="Frecuencia")
-            .sort_values("Frecuencia", ascending=False)
-        )
         st.dataframe(ranking_tulipa, use_container_width=True)
 
     st.markdown("**Top combinaciones cabezal + tulipa + equipo + formato**")
