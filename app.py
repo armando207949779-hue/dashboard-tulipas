@@ -6,6 +6,8 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+import numpy as np
+from datetime import datetime
 
 st.set_page_config(page_title="Dashboard Mantenciones", layout="wide")
 
@@ -21,7 +23,7 @@ URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gi
 # =========================
 col_btn1, col_btn2 = st.columns([1, 5])
 with col_btn1:
-    if st.button("Actualizar datos"):
+    if st.button("🔄 Actualizar datos"):
         st.cache_data.clear()
         st.rerun()
 with col_btn2:
@@ -34,8 +36,7 @@ def normalizar_formato(valor):
     if pd.isna(valor):
         return valor
     txt = str(valor).strip().upper()
-    txt = txt.replace("[", "").replace("]", "")
-    txt = txt.replace("CC", "").strip()
+    txt = txt.replace("[", "").replace("]", "").replace("CC", "").strip()
     txt = txt.replace(".", "").replace(",", "")
     if "2000" in txt:
         return "2.000 CC"
@@ -45,15 +46,15 @@ def normalizar_formato(valor):
 
 def obtener_tulipas_por_formato(formato):
     if formato == "2.000 CC":
-        return [7, 8, 9, 4, 5, 6, 1, 2, 3]
+        return [7,8,9,4,5,6,1,2,3]
     if formato == "2.500 CC":
-        return [5, 6, 3, 4, 1, 2]
+        return [5,6,3,4,1,2]
     return []
 
 def construir_matriz_formato(df_base, equipo, formato):
     tulipas = obtener_tulipas_por_formato(formato)
     cabezales = list(range(1, 8))
-
+    
     filas = []
     for tulipa in tulipas:
         fila = {"N° TULIPA": tulipa}
@@ -66,7 +67,7 @@ def construir_matriz_formato(df_base, equipo, formato):
             ].shape[0]
             fila[f"Cabezal {cabezal}"] = freq
         filas.append(fila)
-
+    
     matriz = pd.DataFrame(filas)
     if not matriz.empty:
         matriz = matriz.sort_values("N° TULIPA", ascending=False).reset_index(drop=True)
@@ -76,12 +77,12 @@ def crear_heatmap_formato(df_base, equipo, formato):
     matriz = construir_matriz_formato(df_base, equipo, formato)
     if matriz.empty:
         return None, matriz
-
+    
     columnas_cabezal = [c for c in matriz.columns if c.startswith("Cabezal ")]
     z = matriz[columnas_cabezal].values
     y = matriz["N° TULIPA"].astype(str).tolist()
     x = [c.replace("Cabezal ", "C") for c in columnas_cabezal]
-
+    
     fig = go.Figure(
         data=go.Heatmap(
             z=z,
@@ -94,12 +95,13 @@ def crear_heatmap_formato(df_base, equipo, formato):
             hovertemplate="Cabezal %{x}<br>Tulipa %{y}<br>Frecuencia %{z}<extra></extra>"
         )
     )
-
+    
     fig.update_layout(
         title=f"{equipo} - {formato}",
         xaxis_title="Cabezal",
         yaxis_title="Tulipa",
-        height=420
+        height=420,
+        margin={"t": 60, "b": 60, "l": 60, "r": 60}
     )
     return fig, matriz
 
@@ -125,11 +127,11 @@ def obtener_combo_critico(df_filtrado):
     req = ["EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"]
     if not all(c in df_filtrado.columns for c in req):
         return None, None
-
+    
     base = df_filtrado.dropna(subset=req).copy()
     if base.empty:
         return None, None
-
+    
     ranking = (
         base.groupby(["EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"])
         .size()
@@ -140,18 +142,17 @@ def obtener_combo_critico(df_filtrado):
         )
         .reset_index(drop=True)
     )
-
+    
     return ranking.iloc[0], ranking
 
 def mostrar_tabla_coloreada(df_tabla, subset_cols=None):
     if df_tabla is None or df_tabla.empty:
         st.info("Sin datos para mostrar.")
         return
-
+    
     subset_cols = subset_cols or []
-
+    
     try:
-        import matplotlib  # noqa: F401
         st.dataframe(
             df_tabla.style.background_gradient(cmap="YlOrRd", subset=subset_cols),
             use_container_width=True
@@ -160,27 +161,27 @@ def mostrar_tabla_coloreada(df_tabla, subset_cols=None):
         st.dataframe(df_tabla, use_container_width=True)
 
 # =========================
-# CARGA
+# CARGA DE DATOS
 # =========================
 @st.cache_data(ttl=10)
 def cargar_datos():
     df = pd.read_csv(URL)
-
+    
     df.columns = [str(c).strip() for c in df.columns]
     df = df.loc[:, ~df.columns.str.contains(r"^Unnamed", na=False)]
     df = df.dropna(how="all")
-
+    
     for col in df.columns:
         if df[col].dtype == "object":
             df[col] = df[col].astype(str).str.strip()
-
+    
     df = df.replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "NaN": pd.NA})
-
+    
     if "FORMATO" in df.columns:
         df["FORMATO_STD"] = df["FORMATO"].apply(normalizar_formato)
     else:
         df["FORMATO_STD"] = pd.NA
-
+    
     if "FECHA" in df.columns:
         fecha_limpia = (
             df["FECHA"]
@@ -190,52 +191,55 @@ def cargar_datos():
             .str.replace(r"\s+de\s+", " ", regex=True)
             .str.strip()
         )
-
+        
         meses = {
             "enero": "01", "febrero": "02", "marzo": "03", "abril": "04",
             "mayo": "05", "junio": "06", "julio": "07", "agosto": "08",
             "septiembre": "09", "octubre": "10", "noviembre": "11", "diciembre": "12"
         }
-
+        
         for mes, num in meses.items():
             fecha_limpia = fecha_limpia.str.replace(fr"\b{mes}\b", num, regex=True)
-
+        
         df["FECHA_DT"] = pd.to_datetime(fecha_limpia, format="%d %m %Y", errors="coerce")
-
+    
     for col in ["N° CABEZAL", "N° TULIPA"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-
+    
     return df
 
+# =========================
+# FILTROS MEJORADOS
+# =========================
 def aplicar_filtros(df):
-    st.sidebar.header("Filtros")
-
+    st.sidebar.header("🔍 Filtros")
+    
     df_filtrado = df.copy()
-
+    
+    # Filtro de fecha mejorado
     if "FECHA_DT" in df_filtrado.columns and not df_filtrado["FECHA_DT"].dropna().empty:
         fecha_min = df_filtrado["FECHA_DT"].min().date()
         fecha_max = df_filtrado["FECHA_DT"].max().date()
-
-        rango_fechas = st.sidebar.date_input(
-            "Rango de fechas",
-            value=(fecha_min, fecha_max),
-            min_value=fecha_min,
-            max_value=fecha_max
-        )
-
-        if isinstance(rango_fechas, tuple) and len(rango_fechas) == 2:
-            fecha_inicio, fecha_fin = rango_fechas
-            df_filtrado = df_filtrado[
-                df_filtrado["FECHA_DT"].between(pd.to_datetime(fecha_inicio), pd.to_datetime(fecha_fin))
-            ]
-
+        
+        col_f1, col_f2 = st.sidebar.columns(2)
+        with col_f1:
+            fecha_inicio = st.date_input("Desde", value=fecha_min, min_value=fecha_min, max_value=fecha_max)
+        with col_f2:
+            fecha_fin = st.date_input("Hasta", value=fecha_max, min_value=fecha_min, max_value=fecha_max)
+        
+        df_filtrado = df_filtrado[
+            df_filtrado["FECHA_DT"].between(pd.to_datetime(fecha_inicio), pd.to_datetime(fecha_fin))
+        ]
+    
     def multiselect_col(nombre, label=None):
         if nombre in df_filtrado.columns:
-            vals = sorted([v for v in df_filtrado[nombre].dropna().unique()])
-            return st.sidebar.multiselect(label or nombre, vals, default=vals)
+            vals = sorted(df_filtrado[nombre].dropna().unique())
+            if not vals:
+                return []
+            return st.sidebar.multiselect(label or nombre, vals, default=vals[:3] if len(vals)>3 else vals)
         return []
-
+    
     turnos = multiselect_col("TURNO")
     operadores = multiselect_col("OPERADOR")
     equipos = multiselect_col("EQUIPO")
@@ -243,26 +247,26 @@ def aplicar_filtros(df):
     sabores = multiselect_col("SABOR")
     mantenciones = multiselect_col("MANTENCIÓN")
     observaciones = multiselect_col("OBSERVACIÓN")
-
-    if "TURNO" in df_filtrado.columns:
-        df_filtrado = df_filtrado[df_filtrado["TURNO"].isin(turnos)]
-    if "OPERADOR" in df_filtrado.columns:
-        df_filtrado = df_filtrado[df_filtrado["OPERADOR"].isin(operadores)]
-    if "EQUIPO" in df_filtrado.columns:
-        df_filtrado = df_filtrado[df_filtrado["EQUIPO"].isin(equipos)]
-    if "FORMATO_STD" in df_filtrado.columns:
-        df_filtrado = df_filtrado[df_filtrado["FORMATO_STD"].isin(formatos)]
-    if "SABOR" in df_filtrado.columns:
-        df_filtrado = df_filtrado[df_filtrado["SABOR"].isin(sabores)]
-    if "MANTENCIÓN" in df_filtrado.columns:
-        df_filtrado = df_filtrado[df_filtrado["MANTENCIÓN"].isin(mantenciones)]
-    if "OBSERVACIÓN" in df_filtrado.columns:
-        df_filtrado = df_filtrado[df_filtrado["OBSERVACIÓN"].isin(observaciones)]
-
+    
+    # Aplicar filtros
+    filtros = {
+        "TURNO": turnos,
+        "OPERADOR": operadores, 
+        "EQUIPO": equipos,
+        "FORMATO_STD": formatos,
+        "SABOR": sabores,
+        "MANTENCIÓN": mantenciones,
+        "OBSERVACIÓN": observaciones
+    }
+    
+    for col, valores in filtros.items():
+        if col in df_filtrado.columns and valores:
+            df_filtrado = df_filtrado[df_filtrado[col].isin(valores)]
+    
     return df_filtrado
 
 # =========================
-# DATA
+# CARGA PRINCIPAL
 # =========================
 df = cargar_datos()
 df_filtrado = aplicar_filtros(df)
@@ -270,13 +274,16 @@ df_filtrado = aplicar_filtros(df)
 # =========================
 # HEADER
 # =========================
-st.title("Dashboard de Mantenciones")
-st.caption("Registro de mantenciones de tulipas, encajonadora y desencajonadora")
-st.markdown("**Elaborado por:** Enrique Brun  \n**Jefe de Operaciones:** Gaston Flores")
+st.title("🚀 Dashboard de Mantenciones")
+st.markdown("**Tulipas - Encajonadora y Desencajonadora**")
+st.markdown("***Elaborado por: Enrique Brun* | *Jefe de Operaciones: Gaston Flores***")
 
 # =========================
-# KPIs
+# KPIs PRINCIPALES - RESPUESTAS DIRECTAS
 # =========================
+st.markdown("---")
+st.subheader("📊 Respuestas Automáticas")
+
 total_mant = len(df_filtrado)
 mant_top = top_valor(df_filtrado, "MANTENCIÓN")
 fecha_inicio = df_filtrado["FECHA_DT"].min() if "FECHA_DT" in df_filtrado.columns and not df_filtrado.empty else pd.NaT
@@ -284,230 +291,190 @@ fecha_fin = df_filtrado["FECHA_DT"].max() if "FECHA_DT" in df_filtrado.columns a
 
 combo_critico, ranking_combo = obtener_combo_critico(df_filtrado)
 
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("¿Cuántas mantenciones hubo?", total_mant)
-k2.metric("Mantención más frecuente", mant_top)
-k3.metric("Fecha inicio", formatear_fecha(fecha_inicio))
-k4.metric("Fecha fin", formatear_fecha(fecha_fin))
-
-# =========================
-# RESPUESTAS AUTOMÁTICAS
-# =========================
-st.subheader("Respuestas automáticas")
+k1, k2, k3, k4, k5 = st.columns(5)
+k1.metric("📈 Total mantenciones", total_mant)
+k2.metric("🔥 Mantención más frecuente", mant_top)
+k3.metric("📅 Fecha inicio", formatear_fecha(fecha_inicio))
+k4.metric("📅 Fecha fin", formatear_fecha(fecha_fin))
+k5.metric("🎯 Registros filtrados", f"{len(df_filtrado)}")
 
 if combo_critico is not None:
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Equipo más crítico", str(combo_critico["EQUIPO"]))
-    r2.metric("Formato más crítico", str(combo_critico["FORMATO_STD"]))
-    r3.metric("Cabezal más crítico", int(combo_critico["N° CABEZAL"]))
-    r4.metric("Tulipa más crítica", int(combo_critico["N° TULIPA"]))
-
-    st.info(
-        f"Combinación más crítica: {combo_critico['EQUIPO']} | {combo_critico['FORMATO_STD']} | "
-        f"Cabezal {int(combo_critico['N° CABEZAL'])} | Tulipa {int(combo_critico['N° TULIPA'])} | "
-        f"Frecuencia = {int(combo_critico['Frecuencia'])}"
-    )
-else:
-    st.warning("No hay datos suficientes para determinar criticidad.")
+    st.success(f"**🎯 Combinación MÁS CRÍTICA:** {combo_critico['EQUIPO']} | {combo_critico['FORMATO_STD']} | Cabezal {int(combo_critico['N° CABEZAL'])} | Tulipa {int(combo_critico['N° TULIPA'])} (**{int(combo_critico['Frecuencia'])}** veces)")
 
 # =========================
 # TOP FRECUENCIAS
 # =========================
-st.subheader("Top equipo, formato, cabezal y tulipa con mayor frecuencia")
-
+st.subheader("🏆 TOP por Categoría")
 t1, t2, t3, t4 = st.columns(4)
-with t1:
-    st.dataframe(top_tabla(df_filtrado, "EQUIPO", "EQUIPO", 10), use_container_width=True)
+with t1: 
+    st.markdown("**Equipo**")
+    st.dataframe(top_tabla(df_filtrado, "EQUIPO"), use_container_width=True)
 with t2:
-    st.dataframe(top_tabla(df_filtrado, "FORMATO_STD", "FORMATO", 10), use_container_width=True)
+    st.markdown("**Formato**") 
+    st.dataframe(top_tabla(df_filtrado, "FORMATO_STD", "FORMATO"), use_container_width=True)
 with t3:
-    st.dataframe(top_tabla(df_filtrado, "N° CABEZAL", "N° CABEZAL", 10), use_container_width=True)
+    st.markdown("**Cabezal**")
+    st.dataframe(top_tabla(df_filtrado, "N° CABEZAL"), use_container_width=True)
 with t4:
-    st.dataframe(top_tabla(df_filtrado, "N° TULIPA", "N° TULIPA", 10), use_container_width=True)
+    st.markdown("**Tulipa**")
+    st.dataframe(top_tabla(df_filtrado, "N° TULIPA"), use_container_width=True)
 
 # =========================
-# FECHAS CON MANTENCIÓN
+# GRÁFICOS PRINCIPALES
 # =========================
-st.subheader("¿En qué fechas se hizo mantención?")
-if "FECHA_DT" in df_filtrado.columns and not df_filtrado["FECHA_DT"].dropna().empty:
-    fechas_mant = (
-        df_filtrado.groupby("FECHA_DT")
-        .size()
-        .reset_index(name="Cantidad")
-        .sort_values("FECHA_DT")
-    )
-    fechas_mant["FECHA"] = fechas_mant["FECHA_DT"].dt.strftime("%d-%m-%Y")
-    st.dataframe(fechas_mant[["FECHA", "Cantidad"]], use_container_width=True)
+st.markdown("---")
+col1, col2 = st.columns(2)
 
-# =========================
-# GRÁFICOS
-# =========================
-g1, g2 = st.columns(2)
-
-with g1:
+with col1:
+    st.markdown("**📅 Evolución temporal**")
     if "FECHA_DT" in df_filtrado.columns and not df_filtrado["FECHA_DT"].dropna().empty:
-        serie = (
-            df_filtrado.groupby("FECHA_DT")
-            .size()
-            .reset_index(name="Cantidad")
-            .sort_values("FECHA_DT")
-        )
-        fig = px.line(
-            serie,
-            x="FECHA_DT",
-            y="Cantidad",
-            markers=True,
-            title="Mantenciones por fecha"
-        )
-        fig.update_layout(xaxis_title="Fecha", yaxis_title="Cantidad")
+        serie = df_filtrado.groupby(df_filtrado["FECHA_DT"].dt.date).size().reset_index(name="Cantidad")
+        serie["FECHA"] = serie["FECHA_DT"].astype(str)
+        fig = px.line(serie, x="FECHA", y="Cantidad", markers=True, title="Mantenciones por día")
         st.plotly_chart(fig, use_container_width=True)
 
-with g2:
+with col2:
+    st.markdown("**🔧 Tipos de mantención**")
     if "MANTENCIÓN" in df_filtrado.columns:
-        mant = df_filtrado["MANTENCIÓN"].value_counts().reset_index()
+        mant = df_filtrado["MANTENCIÓN"].value_counts().head(10).reset_index()
         mant.columns = ["MANTENCIÓN", "Cantidad"]
-        fig = px.bar(
-            mant,
-            x="MANTENCIÓN",
-            y="Cantidad",
-            title="Frecuencia por tipo de mantención"
-        )
+        fig = px.bar(mant, x="Cantidad", y="MANTENCIÓN", orientation='h', title="Frecuencia por tipo")
         st.plotly_chart(fig, use_container_width=True)
 
-g3, g4 = st.columns(2)
-
-with g3:
+col3, col4 = st.columns(2)
+with col3:
+    st.markdown("**👷 Por operador**")
     if "OPERADOR" in df_filtrado.columns:
         op = df_filtrado["OPERADOR"].value_counts().reset_index()
         op.columns = ["OPERADOR", "Cantidad"]
-        fig = px.bar(op, x="OPERADOR", y="Cantidad", title="Mantenciones por operador")
+        fig = px.bar(op, x="Cantidad", y="OPERADOR", orientation='h')
         st.plotly_chart(fig, use_container_width=True)
 
-with g4:
+with col4:
+    st.markdown("**🏭 Distribución equipos**")
     if "EQUIPO" in df_filtrado.columns:
         eq = df_filtrado["EQUIPO"].value_counts().reset_index()
         eq.columns = ["EQUIPO", "Cantidad"]
-        fig = px.pie(eq, names="EQUIPO", values="Cantidad", title="Distribución por equipo")
+        fig = px.pie(eq, names="EQUIPO", values="Cantidad")
         st.plotly_chart(fig, use_container_width=True)
 
-g5, g6 = st.columns(2)
+# =========================
+# ESQUEMAS DE EQUIPOS (4 Diagramas)
+# =========================
+st.markdown("---")
+st.subheader("🔥 ESQUEMAS DE FRECUENCIA POR CABEZAL Y TULIPA")
+st.markdown("*4 diagramas: 2 equipos × 2 formatos cada uno*")
 
-with g5:
+equipos = ["ENCAJONADORA", "DESENCAJONADORA"]
+formatos = ["2.000 CC", "2.500 CC"]
+
+for equipo in equipos:
+    st.markdown(f"### {equipo}")
+    c1, c2 = st.columns(2)
+    
+    for i, formato in enumerate(formatos):
+        col = c1 if i == 0 else c2
+        with col:
+            fig, matriz = crear_heatmap_formato(df_filtrado, equipo, formato)
+            if fig is not None:
+                st.plotly_chart(fig, use_container_width=True)
+                st.markdown(f"**Tabla {formato}:**")
+                mostrar_tabla_coloreada(matriz)
+            else:
+                st.info(f"Sin datos para {equipo} - {formato}")
+
+# =========================
+# ANÁLISIS AVANZADO
+# =========================
+st.markdown("---")
+col_a1, col_a2 = st.columns(2)
+
+with col_a1:
+    st.markdown("**⏰ Por turno**")
     if "TURNO" in df_filtrado.columns:
         turno = df_filtrado["TURNO"].value_counts().reset_index()
         turno.columns = ["TURNO", "Cantidad"]
-        fig = px.bar(turno, x="TURNO", y="Cantidad", title="Mantenciones por turno")
+        fig = px.bar(turno, x="TURNO", y="Cantidad", title="")
         st.plotly_chart(fig, use_container_width=True)
 
-with g6:
+with col_a2:
+    st.markdown("**📦 Por formato**")
     if "FORMATO_STD" in df_filtrado.columns:
         formato = df_filtrado["FORMATO_STD"].value_counts().reset_index()
         formato.columns = ["FORMATO", "Cantidad"]
-        fig = px.bar(formato, x="FORMATO", y="Cantidad", title="Mantenciones por formato")
+        fig = px.bar(formato, x="FORMATO", y="Cantidad", title="")
         st.plotly_chart(fig, use_container_width=True)
 
 # =========================
-# CRUCE EQUIPO VS MANTENCIÓN
+# CRUCES Y TABLAS
 # =========================
-st.subheader("Cruce equipo vs mantención")
-if {"EQUIPO", "MANTENCIÓN"}.issubset(df_filtrado.columns):
-    tabla_cruce = pd.crosstab(df_filtrado["EQUIPO"], df_filtrado["MANTENCIÓN"])
-    st.dataframe(tabla_cruce, use_container_width=True)
+st.subheader("📋 Análisis Cruzado")
+c1, c2 = st.columns(2)
 
-# =========================
-# ESQUEMA / MAPAS POR EQUIPO Y FORMATO
-# =========================
-st.subheader("Esquema de equipos: frecuencia de mantenciones por cabezal y tulipa")
-st.markdown("""
-Cada diagrama muestra la frecuencia de mantenciones para la combinación:
-**Equipo + Formato + Cabezal + Tulipa**.
-""")
+with c1:
+    if {"EQUIPO", "MANTENCIÓN"}.issubset(df_filtrado.columns):
+        st.markdown("**Cruce Equipo × Mantención**")
+        tabla_cruce = pd.crosstab(df_filtrado["EQUIPO"], df_filtrado["MANTENCIÓN"])
+        mostrar_tabla_coloreada(tabla_cruce)
 
-equipos_base = ["ENCAJONADORA", "DESENCAJONADORA"]
-
-for equipo in equipos_base:
-    st.markdown(f"### {equipo}")
-    c1, c2 = st.columns(2)
-
-    with c1:
-        fig_2000, matriz_2000 = crear_heatmap_formato(df_filtrado, equipo, "2.000 CC")
-        if fig_2000 is not None:
-            st.plotly_chart(fig_2000, use_container_width=True)
-            mostrar_tabla_coloreada(
-                matriz_2000,
-                subset_cols=[c for c in matriz_2000.columns if c.startswith("Cabezal ")]
-            )
-        else:
-            st.info("Sin datos para este esquema.")
-
-    with c2:
-        fig_2500, matriz_2500 = crear_heatmap_formato(df_filtrado, equipo, "2.500 CC")
-        if fig_2500 is not None:
-            st.plotly_chart(fig_2500, use_container_width=True)
-            mostrar_tabla_coloreada(
-                matriz_2500,
-                subset_cols=[c for c in matriz_2500.columns if c.startswith("Cabezal ")]
-            )
-        else:
-            st.info("Sin datos para este esquema.")
+with c2:
+    st.markdown("**📊 Fechas con mantención**")
+    if "FECHA_DT" in df_filtrado.columns:
+        fechas = df_filtrado.groupby(df_filtrado["FECHA_DT"].dt.date).size().reset_index(name="Cantidad")
+        fechas["FECHA"] = fechas["FECHA_DT"].dt.strftime("%d-%m-%Y")
+        st.dataframe(fechas[["FECHA", "Cantidad"]].sort_values("FECHA"), use_container_width=True)
 
 # =========================
-# TABLA COMPLETA FRECUENCIA
+# TABLA COMPLETA FRECUENCIAS
 # =========================
-st.subheader("Tabla de frecuencia por equipo, formato, cabezal y tulipa")
-
+st.subheader("🎯 Tabla Completa: Frecuencia por Combinación")
 if {"EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"}.issubset(df_filtrado.columns):
-    tabla_frecuencia = (
+    tabla_frec = (
         df_filtrado.groupby(["EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"])
         .size()
         .reset_index(name="Frecuencia")
-        .sort_values(["EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"])
+        .sort_values("Frecuencia", ascending=False)
     )
-
-    mostrar_tabla_coloreada(
-        tabla_frecuencia,
-        subset_cols=["Frecuencia"]
-    )
+    mostrar_tabla_coloreada(tabla_frec, subset_cols=["Frecuencia"])
+    st.session_state['tabla_frec'] = tabla_frec
 
 # =========================
-# TOP COMBINACIONES CRÍTICAS
+# DETALLE REGISTROS
 # =========================
-st.subheader("Top combinaciones críticas")
-if ranking_combo is not None and not ranking_combo.empty:
-    st.dataframe(ranking_combo.head(15), use_container_width=True)
-
-# =========================
-# DETALLE DE REGISTROS
-# =========================
-st.subheader("Detalle de registros")
+st.markdown("---")
+st.subheader("📄 Detalle Completo de Registros")
 columnas_mostrar = [
-    c for c in [
-        "FECHA", "TURNO", "OPERADOR", "EQUIPO", "FORMATO_STD", "SABOR",
-        "N° CABEZAL", "N° TULIPA", "MANTENCIÓN", "OBSERVACIÓN"
-    ] if c in df_filtrado.columns
+    c for c in ["FECHA", "TURNO", "OPERADOR", "EQUIPO", "FORMATO", "SABOR",
+                "N° CABEZAL", "N° TULIPA", "MANTENCIÓN", "OBSERVACIÓN"] 
+    if c in df_filtrado.columns
 ]
-detalle = df_filtrado[columnas_mostrar].copy()
-if "FORMATO_STD" in detalle.columns:
-    detalle = detalle.rename(columns={"FORMATO_STD": "FORMATO"})
-
-st.dataframe(detalle, use_container_width=True)
+if "FORMATO_STD" in df_filtrado.columns:
+    detalle = df_filtrado.copy()
+    detalle["FORMATO"] = detalle["FORMATO_STD"]
+    columnas_mostrar = [c if c != "FORMATO_STD" else "FORMATO" for c in columnas_mostrar]
+    st.dataframe(detalle[columnas_mostrar], use_container_width=True)
+else:
+    st.dataframe(df_filtrado[columnas_mostrar], use_container_width=True)
 
 # =========================
 # DESCARGAS
 # =========================
-csv_filtrado = df_filtrado.to_csv(index=False).encode("utf-8-sig")
+st.markdown("---")
+st.subheader("💾 Descargar Datos")
+
+csv_filtrado = df_filtrado[columnas_mostrar].to_csv(index=False).encode("utf-8-sig")
 st.download_button(
-    "Descargar datos filtrados en CSV",
+    "📥 Datos filtrados (CSV)",
     data=csv_filtrado,
-    file_name="mantenciones_filtradas.csv",
+    file_name=f"mantenciones_{datetime.now().strftime('%Y%m%d')}.csv",
     mime="text/csv"
 )
 
-if "tabla_frecuencia" in locals():
-    csv_freq = tabla_frecuencia.to_csv(index=False).encode("utf-8-sig")
+if 'tabla_frec' in st.session_state:
+    csv_freq = st.session_state['tabla_frec'].to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "Descargar tabla de frecuencia",
+        "📊 Tabla frecuencias completas (CSV)",
         data=csv_freq,
-        file_name="frecuencia_equipo_formato_cabezal_tulipa.csv",
+        file_name=f"frecuencias_completas_{datetime.now().strftime('%Y%m%d')}.csv",
         mime="text/csv"
     )
