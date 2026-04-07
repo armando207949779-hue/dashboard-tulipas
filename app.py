@@ -17,7 +17,32 @@ GID = "0"
 URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
 
 # =========================
-# BOTÓN ACTUALIZAR DATOS
+# ESTILO
+# =========================
+st.markdown("""
+<style>
+.block-container {
+    padding-top: 1.2rem;
+    padding-bottom: 2rem;
+}
+[data-testid="stMetric"] {
+    background-color: #f7f9fc;
+    border: 1px solid #e6ebf2;
+    padding: 12px;
+    border-radius: 12px;
+}
+.seccion {
+    padding: 0.8rem 1rem;
+    border-radius: 12px;
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    margin-bottom: 1rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================
+# BOTÓN ACTUALIZAR
 # =========================
 col_btn1, col_btn2 = st.columns([1, 5])
 with col_btn1:
@@ -28,14 +53,13 @@ with col_btn2:
     st.caption("Si cambias datos en Google Sheets, presiona este botón para recargar.")
 
 # =========================
-# FUNCIONES AUXILIARES
+# FUNCIONES
 # =========================
 def normalizar_formato(valor):
     if pd.isna(valor):
         return valor
     txt = str(valor).strip().upper()
-    txt = txt.replace("[", "").replace("]", "")
-    txt = txt.replace("CC", "").strip()
+    txt = txt.replace("[", "").replace("]", "").replace("CC", "").strip()
     txt = txt.replace(".", "").replace(",", "")
     if "2000" in txt:
         return "2.000 CC"
@@ -50,11 +74,42 @@ def obtener_tulipas_por_formato(formato):
         return [5, 6, 3, 4, 1, 2]
     return []
 
+def formatear_fecha(fecha):
+    if pd.isna(fecha):
+        return "-"
+    return pd.to_datetime(fecha).strftime("%d-%m-%Y")
+
+def top_valor(df, columna):
+    if columna not in df.columns or df[columna].dropna().empty:
+        return "-"
+    return df[columna].value_counts().index[0]
+
+def top_tabla(df, columna, nombre, top_n=10):
+    if columna not in df.columns:
+        return pd.DataFrame(columns=[nombre, "Frecuencia"])
+    out = df[columna].value_counts().reset_index()
+    out.columns = [nombre, "Frecuencia"]
+    return out.head(top_n)
+
+def mostrar_tabla_coloreada(df_tabla, subset_cols=None):
+    if df_tabla is None or df_tabla.empty:
+        st.info("Sin datos para mostrar.")
+        return
+    subset_cols = subset_cols or []
+    try:
+        import matplotlib  # noqa
+        st.dataframe(
+            df_tabla.style.background_gradient(cmap="YlOrRd", subset=subset_cols),
+            use_container_width=True
+        )
+    except Exception:
+        st.dataframe(df_tabla, use_container_width=True)
+
 def construir_matriz_formato(df_base, equipo, formato):
     tulipas = obtener_tulipas_por_formato(formato)
     cabezales = list(range(1, 8))
-
     filas = []
+
     for tulipa in tulipas:
         fila = {"N° TULIPA": tulipa}
         for cabezal in cabezales:
@@ -96,30 +151,13 @@ def crear_heatmap_formato(df_base, equipo, formato):
     )
 
     fig.update_layout(
-        title=f"{equipo} - {formato}",
+        title=f"{equipo} | {formato}",
         xaxis_title="Cabezal",
         yaxis_title="Tulipa",
-        height=420
+        height=360,
+        margin=dict(l=10, r=10, t=50, b=10)
     )
     return fig, matriz
-
-def top_valor(df, columna):
-    if columna not in df.columns or df[columna].dropna().empty:
-        return "-"
-    vc = df[columna].value_counts()
-    return vc.index[0]
-
-def top_tabla(df, columna, nombre_columna="Elemento", top_n=10):
-    if columna not in df.columns:
-        return pd.DataFrame(columns=[nombre_columna, "Frecuencia"])
-    tabla = df[columna].value_counts().reset_index()
-    tabla.columns = [nombre_columna, "Frecuencia"]
-    return tabla.head(top_n)
-
-def formatear_fecha(fecha):
-    if pd.isna(fecha):
-        return "-"
-    return pd.to_datetime(fecha).strftime("%d-%m-%Y")
 
 def obtener_combo_critico(df_filtrado):
     req = ["EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"]
@@ -143,25 +181,6 @@ def obtener_combo_critico(df_filtrado):
 
     return ranking.iloc[0], ranking
 
-def mostrar_tabla_coloreada(df_tabla, subset_cols=None):
-    if df_tabla is None or df_tabla.empty:
-        st.info("Sin datos para mostrar.")
-        return
-
-    subset_cols = subset_cols or []
-
-    try:
-        import matplotlib  # noqa: F401
-        st.dataframe(
-            df_tabla.style.background_gradient(cmap="YlOrRd", subset=subset_cols),
-            use_container_width=True
-        )
-    except Exception:
-        st.dataframe(df_tabla, use_container_width=True)
-
-# =========================
-# CARGA
-# =========================
 @st.cache_data(ttl=10)
 def cargar_datos():
     df = pd.read_csv(URL)
@@ -262,10 +281,19 @@ def aplicar_filtros(df):
     return df_filtrado
 
 # =========================
-# DATA
+# CARGA
 # =========================
 df = cargar_datos()
 df_filtrado = aplicar_filtros(df)
+
+# =========================
+# KPIs
+# =========================
+total_mant = len(df_filtrado)
+mant_top = top_valor(df_filtrado, "MANTENCIÓN")
+fecha_inicio = df_filtrado["FECHA_DT"].min() if "FECHA_DT" in df_filtrado.columns and not df_filtrado.empty else pd.NaT
+fecha_fin = df_filtrado["FECHA_DT"].max() if "FECHA_DT" in df_filtrado.columns and not df_filtrado.empty else pd.NaT
+combo_critico, ranking_combo = obtener_combo_critico(df_filtrado)
 
 # =========================
 # HEADER
@@ -275,75 +303,100 @@ st.caption("Registro de mantenciones de tulipas, encajonadora y desencajonadora"
 st.markdown("**Elaborado por:** Enrique Brun  \n**Jefe de Operaciones:** Gaston Flores")
 
 # =========================
-# KPIs
+# RESUMEN EJECUTIVO
 # =========================
-total_mant = len(df_filtrado)
-mant_top = top_valor(df_filtrado, "MANTENCIÓN")
-fecha_inicio = df_filtrado["FECHA_DT"].min() if "FECHA_DT" in df_filtrado.columns and not df_filtrado.empty else pd.NaT
-fecha_fin = df_filtrado["FECHA_DT"].max() if "FECHA_DT" in df_filtrado.columns and not df_filtrado.empty else pd.NaT
-
-combo_critico, ranking_combo = obtener_combo_critico(df_filtrado)
+st.markdown('<div class="seccion">', unsafe_allow_html=True)
+st.subheader("Resumen ejecutivo")
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric("¿Cuántas mantenciones hubo?", total_mant)
+k1.metric("Mantenciones", total_mant)
 k2.metric("Mantención más frecuente", mant_top)
 k3.metric("Fecha inicio", formatear_fecha(fecha_inicio))
 k4.metric("Fecha fin", formatear_fecha(fecha_fin))
 
-# =========================
-# RESPUESTAS AUTOMÁTICAS
-# =========================
-st.subheader("Respuestas automáticas")
-
 if combo_critico is not None:
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Equipo más crítico", str(combo_critico["EQUIPO"]))
-    r2.metric("Formato más crítico", str(combo_critico["FORMATO_STD"]))
-    r3.metric("Cabezal más crítico", int(combo_critico["N° CABEZAL"]))
-    r4.metric("Tulipa más crítica", int(combo_critico["N° TULIPA"]))
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("Equipo más crítico", str(combo_critico["EQUIPO"]))
+    k6.metric("Formato más crítico", str(combo_critico["FORMATO_STD"]))
+    k7.metric("Cabezal más crítico", int(combo_critico["N° CABEZAL"]))
+    k8.metric("Tulipa más crítica", int(combo_critico["N° TULIPA"]))
 
     st.info(
-        f"Combinación más crítica: {combo_critico['EQUIPO']} | {combo_critico['FORMATO_STD']} | "
+        f"Combinación más crítica detectada: {combo_critico['EQUIPO']} | {combo_critico['FORMATO_STD']} | "
         f"Cabezal {int(combo_critico['N° CABEZAL'])} | Tulipa {int(combo_critico['N° TULIPA'])} | "
         f"Frecuencia = {int(combo_critico['Frecuencia'])}"
     )
 else:
-    st.warning("No hay datos suficientes para determinar criticidad.")
+    st.warning("No hay datos suficientes para calcular criticidad.")
+st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# TOP FRECUENCIAS
+# ESQUEMAS AL INICIO
 # =========================
+st.markdown('<div class="seccion">', unsafe_allow_html=True)
+st.subheader("Esquema visual de equipos")
+st.caption("Se muestran 4 diagramas: 2 formatos por ENCAJONADORA y 2 formatos por DESENCAJONADORA.")
+
+c1, c2 = st.columns(2)
+with c1:
+    fig, matriz = crear_heatmap_formato(df_filtrado, "ENCAJONADORA", "2.000 CC")
+    if fig:
+        st.plotly_chart(fig, use_container_width=True)
+        mostrar_tabla_coloreada(matriz, [c for c in matriz.columns if c.startswith("Cabezal ")])
+    else:
+        st.info("Sin datos para ENCAJONADORA 2.000 CC")
+
+with c2:
+    fig, matriz = crear_heatmap_formato(df_filtrado, "ENCAJONADORA", "2.500 CC")
+    if fig:
+        st.plotly_chart(fig, use_container_width=True)
+        mostrar_tabla_coloreada(matriz, [c for c in matriz.columns if c.startswith("Cabezal ")])
+    else:
+        st.info("Sin datos para ENCAJONADORA 2.500 CC")
+
+c3, c4 = st.columns(2)
+with c3:
+    fig, matriz = crear_heatmap_formato(df_filtrado, "DESENCAJONADORA", "2.000 CC")
+    if fig:
+        st.plotly_chart(fig, use_container_width=True)
+        mostrar_tabla_coloreada(matriz, [c for c in matriz.columns if c.startswith("Cabezal ")])
+    else:
+        st.info("Sin datos para DESENCAJONADORA 2.000 CC")
+
+with c4:
+    fig, matriz = crear_heatmap_formato(df_filtrado, "DESENCAJONADORA", "2.500 CC")
+    if fig:
+        st.plotly_chart(fig, use_container_width=True)
+        mostrar_tabla_coloreada(matriz, [c for c in matriz.columns if c.startswith("Cabezal ")])
+    else:
+        st.info("Sin datos para DESENCAJONADORA 2.500 CC")
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# =========================
+# TOPS
+# =========================
+st.markdown('<div class="seccion">', unsafe_allow_html=True)
 st.subheader("Top equipo, formato, cabezal y tulipa con mayor frecuencia")
 
 t1, t2, t3, t4 = st.columns(4)
 with t1:
-    st.dataframe(top_tabla(df_filtrado, "EQUIPO", "EQUIPO", 10), use_container_width=True)
+    st.dataframe(top_tabla(df_filtrado, "EQUIPO", "EQUIPO"), use_container_width=True)
 with t2:
-    st.dataframe(top_tabla(df_filtrado, "FORMATO_STD", "FORMATO", 10), use_container_width=True)
+    st.dataframe(top_tabla(df_filtrado, "FORMATO_STD", "FORMATO"), use_container_width=True)
 with t3:
-    st.dataframe(top_tabla(df_filtrado, "N° CABEZAL", "N° CABEZAL", 10), use_container_width=True)
+    st.dataframe(top_tabla(df_filtrado, "N° CABEZAL", "N° CABEZAL"), use_container_width=True)
 with t4:
-    st.dataframe(top_tabla(df_filtrado, "N° TULIPA", "N° TULIPA", 10), use_container_width=True)
+    st.dataframe(top_tabla(df_filtrado, "N° TULIPA", "N° TULIPA"), use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# FECHAS CON MANTENCIÓN
+# GRÁFICOS PRINCIPALES
 # =========================
-st.subheader("¿En qué fechas se hizo mantención?")
-if "FECHA_DT" in df_filtrado.columns and not df_filtrado["FECHA_DT"].dropna().empty:
-    fechas_mant = (
-        df_filtrado.groupby("FECHA_DT")
-        .size()
-        .reset_index(name="Cantidad")
-        .sort_values("FECHA_DT")
-    )
-    fechas_mant["FECHA"] = fechas_mant["FECHA_DT"].dt.strftime("%d-%m-%Y")
-    st.dataframe(fechas_mant[["FECHA", "Cantidad"]], use_container_width=True)
+st.markdown('<div class="seccion">', unsafe_allow_html=True)
+st.subheader("Análisis general")
 
-# =========================
-# GRÁFICOS
-# =========================
 g1, g2 = st.columns(2)
-
 with g1:
     if "FECHA_DT" in df_filtrado.columns and not df_filtrado["FECHA_DT"].dropna().empty:
         serie = (
@@ -352,30 +405,17 @@ with g1:
             .reset_index(name="Cantidad")
             .sort_values("FECHA_DT")
         )
-        fig = px.line(
-            serie,
-            x="FECHA_DT",
-            y="Cantidad",
-            markers=True,
-            title="Mantenciones por fecha"
-        )
-        fig.update_layout(xaxis_title="Fecha", yaxis_title="Cantidad")
+        fig = px.line(serie, x="FECHA_DT", y="Cantidad", markers=True, title="Mantenciones por fecha")
         st.plotly_chart(fig, use_container_width=True)
 
 with g2:
     if "MANTENCIÓN" in df_filtrado.columns:
         mant = df_filtrado["MANTENCIÓN"].value_counts().reset_index()
         mant.columns = ["MANTENCIÓN", "Cantidad"]
-        fig = px.bar(
-            mant,
-            x="MANTENCIÓN",
-            y="Cantidad",
-            title="Frecuencia por tipo de mantención"
-        )
+        fig = px.bar(mant, x="MANTENCIÓN", y="Cantidad", title="Frecuencia por tipo de mantención")
         st.plotly_chart(fig, use_container_width=True)
 
 g3, g4 = st.columns(2)
-
 with g3:
     if "OPERADOR" in df_filtrado.columns:
         op = df_filtrado["OPERADOR"].value_counts().reset_index()
@@ -391,7 +431,6 @@ with g4:
         st.plotly_chart(fig, use_container_width=True)
 
 g5, g6 = st.columns(2)
-
 with g5:
     if "TURNO" in df_filtrado.columns:
         turno = df_filtrado["TURNO"].value_counts().reset_index()
@@ -405,55 +444,39 @@ with g6:
         formato.columns = ["FORMATO", "Cantidad"]
         fig = px.bar(formato, x="FORMATO", y="Cantidad", title="Mantenciones por formato")
         st.plotly_chart(fig, use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# CRUCE EQUIPO VS MANTENCIÓN
+# FECHAS Y CRUCE
 # =========================
-st.subheader("Cruce equipo vs mantención")
-if {"EQUIPO", "MANTENCIÓN"}.issubset(df_filtrado.columns):
-    tabla_cruce = pd.crosstab(df_filtrado["EQUIPO"], df_filtrado["MANTENCIÓN"])
-    st.dataframe(tabla_cruce, use_container_width=True)
+f1, f2 = st.columns(2)
 
-# =========================
-# ESQUEMA / MAPAS POR EQUIPO Y FORMATO
-# =========================
-st.subheader("Esquema de equipos: frecuencia de mantenciones por cabezal y tulipa")
-st.markdown("""
-Cada diagrama muestra la frecuencia de mantenciones para la combinación:
-**Equipo + Formato + Cabezal + Tulipa**.
-""")
+with f1:
+    st.markdown('<div class="seccion">', unsafe_allow_html=True)
+    st.subheader("¿En qué fechas se hizo mantención?")
+    if "FECHA_DT" in df_filtrado.columns and not df_filtrado["FECHA_DT"].dropna().empty:
+        fechas_mant = (
+            df_filtrado.groupby("FECHA_DT")
+            .size()
+            .reset_index(name="Cantidad")
+            .sort_values("FECHA_DT")
+        )
+        fechas_mant["FECHA"] = fechas_mant["FECHA_DT"].dt.strftime("%d-%m-%Y")
+        st.dataframe(fechas_mant[["FECHA", "Cantidad"]], use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-equipos_base = ["ENCAJONADORA", "DESENCAJONADORA"]
-
-for equipo in equipos_base:
-    st.markdown(f"### {equipo}")
-    c1, c2 = st.columns(2)
-
-    with c1:
-        fig_2000, matriz_2000 = crear_heatmap_formato(df_filtrado, equipo, "2.000 CC")
-        if fig_2000 is not None:
-            st.plotly_chart(fig_2000, use_container_width=True)
-            mostrar_tabla_coloreada(
-                matriz_2000,
-                subset_cols=[c for c in matriz_2000.columns if c.startswith("Cabezal ")]
-            )
-        else:
-            st.info("Sin datos para este esquema.")
-
-    with c2:
-        fig_2500, matriz_2500 = crear_heatmap_formato(df_filtrado, equipo, "2.500 CC")
-        if fig_2500 is not None:
-            st.plotly_chart(fig_2500, use_container_width=True)
-            mostrar_tabla_coloreada(
-                matriz_2500,
-                subset_cols=[c for c in matriz_2500.columns if c.startswith("Cabezal ")]
-            )
-        else:
-            st.info("Sin datos para este esquema.")
+with f2:
+    st.markdown('<div class="seccion">', unsafe_allow_html=True)
+    st.subheader("Cruce equipo vs mantención")
+    if {"EQUIPO", "MANTENCIÓN"}.issubset(df_filtrado.columns):
+        tabla_cruce = pd.crosstab(df_filtrado["EQUIPO"], df_filtrado["MANTENCIÓN"])
+        st.dataframe(tabla_cruce, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# TABLA COMPLETA FRECUENCIA
+# TABLA DE FRECUENCIAS
 # =========================
+st.markdown('<div class="seccion">', unsafe_allow_html=True)
 st.subheader("Tabla de frecuencia por equipo, formato, cabezal y tulipa")
 
 if {"EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"}.issubset(df_filtrado.columns):
@@ -463,22 +486,22 @@ if {"EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"}.issubset(df_filtrado.c
         .reset_index(name="Frecuencia")
         .sort_values(["EQUIPO", "FORMATO_STD", "N° CABEZAL", "N° TULIPA"])
     )
-
-    mostrar_tabla_coloreada(
-        tabla_frecuencia,
-        subset_cols=["Frecuencia"]
-    )
+    mostrar_tabla_coloreada(tabla_frecuencia, ["Frecuencia"])
+st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# TOP COMBINACIONES CRÍTICAS
+# TOP COMBINACIONES
 # =========================
+st.markdown('<div class="seccion">', unsafe_allow_html=True)
 st.subheader("Top combinaciones críticas")
 if ranking_combo is not None and not ranking_combo.empty:
     st.dataframe(ranking_combo.head(15), use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
-# DETALLE DE REGISTROS
+# DETALLE
 # =========================
+st.markdown('<div class="seccion">', unsafe_allow_html=True)
 st.subheader("Detalle de registros")
 columnas_mostrar = [
     c for c in [
@@ -489,12 +512,14 @@ columnas_mostrar = [
 detalle = df_filtrado[columnas_mostrar].copy()
 if "FORMATO_STD" in detalle.columns:
     detalle = detalle.rename(columns={"FORMATO_STD": "FORMATO"})
-
 st.dataframe(detalle, use_container_width=True)
+st.markdown("</div>", unsafe_allow_html=True)
 
 # =========================
 # DESCARGAS
 # =========================
+st.subheader("Descargas")
+
 csv_filtrado = df_filtrado.to_csv(index=False).encode("utf-8-sig")
 st.download_button(
     "Descargar datos filtrados en CSV",
